@@ -1,5 +1,6 @@
 from datetime import date
 
+import streamlit_authenticator as stauth
 import altair as alt
 import pandas as pd
 import streamlit as st
@@ -1921,5 +1922,127 @@ def main():
     )
 
 
-if __name__ == "__main__":
+def converter_secrets_para_dict(valor):
+    """Converte recursivamente objetos de st.secrets em tipos nativos."""
+    if hasattr(valor, "items"):
+        return {
+            chave: converter_secrets_para_dict(
+                conteudo
+            )
+            for chave, conteudo in valor.items()
+        }
+
+    if isinstance(valor, (list, tuple)):
+        return [
+            converter_secrets_para_dict(item)
+            for item in valor
+        ]
+
+    return valor
+
+
+def carregar_configuracao_autenticacao():
+    """Lê e valida a seção [auth] do secrets.toml."""
+    if "auth" not in st.secrets:
+        st.error(
+            "A configuração de acesso não foi encontrada. "
+            "Inclua a seção [auth] no arquivo "
+            ".streamlit/secrets.toml."
+        )
+        st.stop()
+
+    config = converter_secrets_para_dict(
+        st.secrets["auth"]
+    )
+
+    credenciais = config.get("credentials", {})
+    usuarios = credenciais.get("usernames", {})
+    cookie = config.get("cookie", {})
+
+    campos_cookie = {
+        "name",
+        "key",
+        "expiry_days",
+    }
+
+    if not usuarios:
+        st.error(
+            "Nenhum usuário foi configurado em "
+            "[auth.credentials.usernames]."
+        )
+        st.stop()
+
+    if not campos_cookie.issubset(cookie):
+        st.error(
+            "A configuração [auth.cookie] está incompleta. "
+            "Informe name, key e expiry_days."
+        )
+        st.stop()
+
+    return config
+
+
+def executar_app_autenticado():
+    """Exibe o painel somente depois de validar o login."""
+    config = carregar_configuracao_autenticacao()
+
+    authenticator = stauth.Authenticate(
+        config["credentials"],
+        config["cookie"]["name"],
+        config["cookie"]["key"],
+        config["cookie"]["expiry_days"],
+        auto_hash=False,
+    )
+
+    authenticator.login(
+        location="main",
+        max_login_attempts=5,
+        fields={
+            "Form name": "Acesso ao Painel PREP",
+            "Username": "Usuário",
+            "Password": "Senha",
+            "Login": "Entrar",
+            "Captcha": "Captcha",
+        },
+    )
+
+    status = st.session_state.get(
+        "authentication_status"
+    )
+
+    if status is False:
+        st.error(
+            "Usuário ou senha incorretos."
+        )
+        return
+
+    if status is None:
+        st.info(
+            "Informe seu usuário e sua senha para acessar o painel."
+        )
+        return
+
     main()
+
+    st.sidebar.markdown("---")
+
+    nome_usuario = st.session_state.get(
+        "name",
+        "",
+    )
+
+    if nome_usuario:
+        st.sidebar.caption(
+            f"Conectado como {nome_usuario}"
+        )
+
+    authenticator.logout(
+        button_name="Sair da conta",
+        location="sidebar",
+        key="logout_painel_prep",
+        use_container_width=True,
+    )
+
+
+if __name__ == "__main__":
+    executar_app_autenticado()
